@@ -16,6 +16,7 @@ public class User
     public int ScanQuota { get; set; } = 50;
     public int ScansUsed { get; set; }
     public bool IsActive { get; set; } = true;
+    public bool IsAdmin { get; set; } = false;
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     public DateTime? LastLogin { get; set; }
     public DateTime? LastQuotaReset { get; set; }
