@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
 using SecurePrintManager.Core;
 using SecurePrintManager.Database;
 
@@ -57,6 +58,21 @@ public partial class MainWindow : Window
         return PrintQueueDataGrid.SelectedItem as PrintJob;
     }
 
+    private void PrintQueueDataGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var job = GetSelectedJob();
+        if (job == null)
+        {
+            PreviewInfoText.Text = "Selectează un job pentru a vedea detalii (PDF/imagine).";
+            PreviewMetaText.Text = string.Empty;
+            return;
+        }
+
+        // Pentru moment afișăm doar meta; ulterior poți deschide PDF/imaginea din SpoolFile
+        PreviewInfoText.Text = job.DocumentName;
+        PreviewMetaText.Text = $"Pagini: {job.Pages}, Printer: {job.PrinterName}, Cost: {job.Cost:0.00} RON";
+    }
+
     private void PrintSelectedJob_Click(object sender, RoutedEventArgs e)
     {
         var job = GetSelectedJob();
@@ -67,7 +83,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        // TODO: logică reală de trimitere la imprimantă (decriptare spool + re-submit)
         job.Status = "PRINTED";
         job.PrintedAt = DateTime.Now;
         job.ReleasedBy = _currentUser.Username;
@@ -105,10 +120,21 @@ public partial class MainWindow : Window
         LoadPrintQueue();
     }
 
-    // Navigare (pentru viitoare ferestre)
     private void PrintQueueButton_Click(object sender, RoutedEventArgs e) => LoadPrintQueue();
-    private void HistoryButton_Click(object sender, RoutedEventArgs e) { /* deschizi HistoryWindow */ }
-    private void ReportsButton_Click(object sender, RoutedEventArgs e) { /* deschizi ReportsWindow */ }
+
+    private void HistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        var historyWindow = new HistoryWindow(_currentUser, _currentUser.IsAdmin);
+        historyWindow.ShowDialog();
+    }
+
+    private void ReportsButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Placeholder: aici poți deschide o fereastră de rapoarte cu grafice
+        MessageBox.Show("Reports window to be implemented.", "Info",
+            MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     private void AdminButton_Click(object sender, RoutedEventArgs e)
     {
         if (!_currentUser.IsAdmin)
