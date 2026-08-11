@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SecurePrintManager.Core/SecurePrintManager.Core.csproj" />
+    <Project Path="src/SecurePrintManager.Database/SecurePrintManager.Database.csproj" />
+    <Project Path="src/SecurePrintManager.Service/SecurePrintManager.Service.csproj" />
+    <Project Path="src/SecurePrintManager.UI/SecurePrintManager.UI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SecurePrintManager.Tests/SecurePrintManager.Tests.csproj" />
+  </Folder>
+</Solution>

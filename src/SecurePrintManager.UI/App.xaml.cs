@@ -1,0 +1,1 @@
+using System.Windows; namespace SecurePrintManager.UI; public partial class App : Application { }
