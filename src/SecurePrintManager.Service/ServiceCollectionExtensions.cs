@@ -28,6 +28,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<AuditLogger>();
         services.AddSingleton<QuotaManager>();
         services.AddSingleton<PrintMonitor>();
+        services.AddSingleton<PdfSpoolWatcher>();
+        services.AddSingleton<ScanSpoolWatcher>();
 
         return services;
     }

@@ -13,6 +13,8 @@ public class Worker : BackgroundService
     private readonly ILogger<Worker> _logger;
     private readonly IServiceProvider _serviceProvider;
     private PrintMonitor? _printMonitor;
+    private PdfSpoolWatcher? _pdfWatcher;
+    private ScanSpoolWatcher? _scanWatcher;
 
     public Worker(ILogger<Worker> logger, IServiceProvider serviceProvider)
     {
@@ -26,26 +28,49 @@ public class Worker : BackgroundService
 
         try
         {
-            // Create scope to resolve scoped services
             using var scope = _serviceProvider.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
             var encryption = scope.ServiceProvider.GetRequiredService<FileEncryptionService>();
             var audit = scope.ServiceProvider.GetRequiredService<AuditLogger>();
+            var quotaManager = scope.ServiceProvider.GetRequiredService<QuotaManager>();
+            var pdfWatcher = scope.ServiceProvider.GetRequiredService<PdfSpoolWatcher>();
+            var scanWatcher = scope.ServiceProvider.GetRequiredService<ScanSpoolWatcher>();
 
-            // Ensure database exists
             await db.Database.EnsureCreatedAsync(stoppingToken);
-            _logger.LogInformation("Database initialized at {Path}", GetDatabasePath());
 
-            // Initialize PrintMonitor
+            // Get spool folders from config
+            var pdfFolderConfig = db.Configs.FirstOrDefault(c => c.Key == "PdfSpoolFolder");
+            var scanFolderConfig = db.Configs.FirstOrDefault(c => c.Key == "ScanSpoolFolder");
+
+            var pdfFolder = pdfFolderConfig?.Value ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "SecurePrintManager",
+                "PdfSpool"
+            );
+
+            var scanFolder = scanFolderConfig?.Value ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "SecurePrintManager",
+                "ScanSpool"
+            );
+
+            // Ensure folders exist
+            Directory.CreateDirectory(pdfFolder);
+            Directory.CreateDirectory(scanFolder);
+
+            // Start watchers
             _printMonitor = new PrintMonitor(db, encryption, audit);
-            _logger.LogInformation("PrintMonitor initialized and listening for print jobs");
+            _pdfWatcher = pdfWatcher;
+            _scanWatcher = scanWatcher;
 
-            // Run until shutdown
+            _pdfWatcher.Start(pdfFolder);
+            _scanWatcher.Start(scanFolder);
+
+            _logger.LogInformation("Watchers started. PDF: {PdfFolder}, Scan: {ScanFolder}", pdfFolder, scanFolder);
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
-                
-                // Optional: periodic cleanup of expired jobs
                 await CleanupExpiredJobsAsync(db, audit, stoppingToken);
             }
         }
@@ -61,24 +86,16 @@ public class Worker : BackgroundService
         finally
         {
             _printMonitor?.Dispose();
+            _pdfWatcher?.Stop();
+            _scanWatcher?.Stop();
             _logger.LogInformation("SecurePrintManager Worker stopped at {Time}", DateTimeOffset.Now);
         }
-    }
-
-    private string GetDatabasePath()
-    {
-        return System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "SecurePrintManager",
-            "secureprint.db"
-        );
     }
 
     private async Task CleanupExpiredJobsAsync(DatabaseContext db, AuditLogger audit, CancellationToken cancellationToken)
     {
         try
         {
-            // Get timeout from config
             var config = db.Configs.FirstOrDefault(c => c.Key == "JobTimeoutHours");
             if (config == null) return;
 
@@ -86,7 +103,6 @@ public class Worker : BackgroundService
 
             var expiryThreshold = DateTime.Now.AddHours(-timeoutHours);
 
-            // Find expired HOLD jobs
             var expiredJobs = db.PrintJobs
                 .Where(j => j.Status == "HOLD" && j.Timestamp < expiryThreshold)
                 .ToList();
@@ -94,7 +110,7 @@ public class Worker : BackgroundService
             foreach (var job in expiredJobs)
             {
                 job.Status = "EXPIRED";
-                _logger.LogInformation("Job {JobId} expired and marked for deletion", job.Id);
+                _logger.LogInformation("Job {JobId} expired", job.Id);
                 audit.Log("EXPIRE", "SYSTEM", job.DocumentName, $"Job {job.Id} expired after {timeoutHours} hours");
             }
 
