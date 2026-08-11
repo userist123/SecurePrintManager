@@ -1,16 +1,79 @@
 using Microsoft.EntityFrameworkCore;
+using SecurePrintManager.Core;
+
 namespace SecurePrintManager.Database;
-public sealed class DatabaseContext(DbContextOptions<DatabaseContext> options) : DbContext(options)
+
+public class DatabaseContext : DbContext
 {
-    public DbSet<UserEntity> Users => Set<UserEntity>();
-    public DbSet<PrintJobEntity> PrintJobs => Set<PrintJobEntity>();
-    public DbSet<AuditLogEntity> AuditLogs => Set<AuditLogEntity>();
-    protected override void OnModelCreating(ModelBuilder b)
+    public DbSet<User> Users { get; set; }
+    public DbSet<PrintJob> PrintJobs { get; set; }
+    public DbSet<ScanJob> ScanJobs { get; set; }
+    public DbSet<AuditLog> AuditLogs { get; set; }
+    public DbSet<Config> Configs { get; set; }
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        b.Entity<UserEntity>().HasKey(x=>x.Id); b.Entity<UserEntity>().HasIndex(x=>x.UserName).IsUnique();
-        b.Entity<PrintJobEntity>().HasKey(x=>x.Id); b.Entity<AuditLogEntity>().HasKey(x=>x.Id);
+        var dbPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "SecurePrintManager",
+            "secureprint.db"
+        );
+
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+
+        optionsBuilder.UseSqlite($"Data Source={dbPath}");
+    }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<User>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.PinCode);
+            entity.HasIndex(e => e.CardCode);
+            entity.HasIndex(e => e.IsActive);
+            entity.Property(e => e.Username).IsRequired();
+        });
+
+        modelBuilder.Entity<PrintJob>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => e.Timestamp);
+            entity.HasOne<User>().WithMany().HasForeignKey(e => e.UserId);
+        });
+
+        modelBuilder.Entity<ScanJob>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.Timestamp);
+            entity.HasOne<User>().WithMany().HasForeignKey(e => e.UserId);
+        });
+
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Timestamp);
+            entity.HasIndex(e => e.Action);
+            entity.HasIndex(e => e.Username);
+        });
+
+        modelBuilder.Entity<Config>(entity =>
+        {
+            entity.HasKey(e => e.Key);
+        });
+
+        // Seed config default
+        modelBuilder.Entity<Config>().HasData(
+            new Config { Key = "JobTimeoutHours", Value = "24", UpdatedAt = DateTime.Now },
+            new Config { Key = "SessionTimeoutMinutes", Value = "15", UpdatedAt = DateTime.Now },
+            new Config { Key = "CostPerPageBW", Value = "0.10", UpdatedAt = DateTime.Now },
+            new Config { Key = "CostPerPageColor", Value = "0.50", UpdatedAt = DateTime.Now },
+            new Config { Key = "CostPerScan", Value = "0.05", UpdatedAt = DateTime.Now },
+            new Config { Key = "EnableEncryption", Value = "true", UpdatedAt = DateTime.Now },
+            new Config { Key = "EnableAuditLog", Value = "true", UpdatedAt = DateTime.Now }
+        );
     }
 }
-public sealed class UserEntity { public Guid Id {get;set;} public required string UserName {get;set;} public bool Enabled {get;set;}=true; public int PageQuota {get;set;} }
-public sealed class PrintJobEntity { public Guid Id {get;set;} public Guid UserId {get;set;} public required string PrinterName {get;set;} public required string DocumentName {get;set;} public int Pages {get;set;} public string State {get;set;}="Created"; public DateTimeOffset CreatedAt {get;set;} }
-public sealed class AuditLogEntity { public Guid Id {get;set;} public DateTimeOffset Timestamp {get;set;} public required string Actor {get;set;} public required string Action {get;set;} public required string Resource {get;set;} public required string Result {get;set;} public required string PreviousHash {get;set;} public required string Hash {get;set;} }

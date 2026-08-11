@@ -1,37 +1,81 @@
+using System;
+
 namespace SecurePrintManager.Core;
 
-public enum PrincipalType { User, Administrator, Service }
-public enum JobState { Created, Authenticated, Authorized, QuotaReserved, Secured, Submitted, Printing, Completed, Failed, Cancelled, RecoveryRequired }
-public enum AuthMethod { Username, Pin, Card }
-public enum Permission { Print, Scan, ManagePrinters, ManageUsers, ViewAudit, ManageQuotas }
-
-public sealed record Principal(Guid Id, string Name, PrincipalType Type);
-
-public sealed class PrintJob
+public class User
 {
-    public Guid Id { get; init; } = Guid.NewGuid();
-    public required Guid UserId { get; init; }
-    public required string PrinterName { get; init; }
-    public required string DocumentName { get; init; }
-    public int Pages { get; init; }
-    public JobState State { get; private set; } = JobState.Created;
+    public int Id { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public string FullName { get; set; } = string.Empty;
+    public string? PasswordHash { get; set; }
+    public string? PinCode { get; set; }
+    public string? CardCode { get; set; }
+    public string? Department { get; set; }
+    public int MonthlyQuota { get; set; } = 100;
+    public int PagesUsed { get; set; }
+    public int ScanQuota { get; set; } = 50;
+    public int ScansUsed { get; set; }
+    public bool IsActive { get; set; } = true;
+    public DateTime CreatedAt { get; set; } = DateTime.Now;
+    public DateTime? LastLogin { get; set; }
+    public DateTime? LastQuotaReset { get; set; }
+}
 
-    private static readonly IReadOnlyDictionary<JobState, HashSet<JobState>> Allowed = new Dictionary<JobState, HashSet<JobState>>
-    {
-        [JobState.Created] = [JobState.Authenticated, JobState.Cancelled, JobState.Failed],
-        [JobState.Authenticated] = [JobState.Authorized, JobState.Cancelled, JobState.Failed],
-        [JobState.Authorized] = [JobState.QuotaReserved, JobState.Cancelled, JobState.Failed],
-        [JobState.QuotaReserved] = [JobState.Secured, JobState.Cancelled, JobState.Failed],
-        [JobState.Secured] = [JobState.Submitted, JobState.Cancelled, JobState.Failed],
-        [JobState.Submitted] = [JobState.Printing, JobState.Failed, JobState.RecoveryRequired],
-        [JobState.Printing] = [JobState.Completed, JobState.Failed, JobState.RecoveryRequired],
-        [JobState.RecoveryRequired] = [JobState.Submitted, JobState.Cancelled, JobState.Failed],
-        [JobState.Completed] = [], [JobState.Failed] = [], [JobState.Cancelled] = []
-    };
+public class PrintJob
+{
+    public int Id { get; set; }
+    public int UserId { get; set; }
+    public string DocumentName { get; set; } = string.Empty;
+    public int Pages { get; set; }
+    public string PrinterName { get; set; } = string.Empty;
+    public string? SpoolFile { get; set; }
+    public string? SpoolFileHash { get; set; }
+    public bool Color { get; set; }
+    public bool Duplex { get; set; }
+    public string Status { get; set; } = "HOLD";
+    public DateTime Timestamp { get; set; } = DateTime.Now;
+    public DateTime? PrintedAt { get; set; }
+    public string? ReleasedBy { get; set; }
+    public decimal Cost { get; set; }
+}
 
-    public void TransitionTo(JobState next)
-    {
-        if (!Allowed[State].Contains(next)) throw new InvalidOperationException($"{State} -> {next} is not allowed.");
-        State = next;
-    }
+public class ScanJob
+{
+    public int Id { get; set; }
+    public int UserId { get; set; }
+    public int Pages { get; set; }
+    public string? Destination { get; set; }
+    public string? FilePath { get; set; }
+    public decimal Cost { get; set; }
+    public DateTime Timestamp { get; set; } = DateTime.Now;
+}
+
+public class AuditLog
+{
+    public int Id { get; set; }
+    public string Action { get; set; } = string.Empty;
+    public string? Username { get; set; }
+    public string? DocumentName { get; set; }
+    public string? Details { get; set; }
+    public string? IpAddress { get; set; }
+    public string? PreviousHash { get; set; }
+    public string CurrentHash { get; set; } = string.Empty;
+    public DateTime Timestamp { get; set; } = DateTime.Now;
+}
+
+public class Config
+{
+    public string Key { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+    public DateTime UpdatedAt { get; set; } = DateTime.Now;
+}
+
+public class Quota
+{
+    public int UserId { get; set; }
+    public int MonthlyQuota { get; set; }
+    public int PagesUsed { get; set; }
+    public int ScanQuota { get; set; }
+    public int ScansUsed { get; set; }
+    public DateTime LastReset { get; set; }
 }
