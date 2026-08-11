@@ -72,17 +72,21 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Preview pane (PDF/Image) -->
+                <!-- Preview pane (PDF/Image via WebBrowser) -->
                 <Border CornerRadius="8" Background="#020617" BorderBrush="#1F2937" BorderThickness="1" Padding="8" Grid.Row="1" Margin="0,12,0,0">
                     <StackPanel>
                         <TextBlock Text="Preview document" Foreground="#E5E7EB" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                        <!-- Placeholder: poți integra un PDF viewer (ex: WebBrowser sau control 3rd party) -->
-                        <Border Background="#0F172A" CornerRadius="6" Height="260" Margin="0,0,0,8">
-                            <TextBlock x:Name="PreviewInfoText"
-                                       Text="Selectează un job pentru a vedea detalii (PDF/imagine)."
-                                       Foreground="#6B7280"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"/>
+                        <Border Background="#0F172A" CornerRadius="6" Height="320" Margin="0,0,0,8">
+                            <Grid>
+                                <!-- WebBrowser pentru PDF preview -->
+                                <WebBrowser x:Name="PreviewWebBrowser" Visibility="Collapsed"/>
+                                <!-- Placeholder text când nu e selectat niciun job -->
+                                <TextBlock x:Name="PreviewInfoText"
+                                           Text="Selectează un job pentru a vedea preview (PDF)."
+                                           Foreground="#6B7280"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
                         </Border>
                         <TextBlock x:Name="PreviewMetaText" Foreground="#9CA3AF" FontSize="12"/>
                     </StackPanel>
@@ -106,7 +110,6 @@
                 <Border CornerRadius="8" Background="#020617" BorderBrush="#1F2937" BorderThickness="1" Padding="10">
                     <StackPanel>
                         <TextBlock Text="Daily activity" Foreground="#E5E7EB" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                        <!-- Placeholder pentru mini-grafice (ex: text summary sau integrare ulterior cu control grafic) -->
                         <TextBlock x:Name="DailyActivityText" Foreground="#9CA3AF" Text="Printuri/scanneri azi: TBD"/>
                     </StackPanel>
                 </Border>
