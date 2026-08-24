@@ -16,7 +16,10 @@ public sealed class AuthenticationService
         if (string.IsNullOrWhiteSpace(pin)) return AuthResult.Failure("Credențială invalidă");
         foreach (var user in _db.Users.Where(u => u.IsActive && !string.IsNullOrEmpty(u.PinCode)).ToList())
         {
-            if (!VerifyAndUpgrade(pin.Trim(), ref user.PinCode)) continue;
+            var stored = user.PinCode;
+            if (!VerifyAndUpgrade(pin.Trim(), stored, out var upgraded)) continue;
+            if (!string.Equals(stored, upgraded, StringComparison.Ordinal))
+                user.PinCode = upgraded;
             user.LastLogin = DateTime.UtcNow;
             _db.SaveChanges();
             return AuthResult.Successful(user);
@@ -29,7 +32,10 @@ public sealed class AuthenticationService
         if (string.IsNullOrWhiteSpace(cardCode)) return AuthResult.Failure("Card invalid");
         foreach (var user in _db.Users.Where(u => u.IsActive && !string.IsNullOrEmpty(u.CardCode)).ToList())
         {
-            if (!VerifyAndUpgrade(cardCode.Trim(), ref user.CardCode)) continue;
+            var stored = user.CardCode;
+            if (!VerifyAndUpgrade(cardCode.Trim(), stored, out var upgraded)) continue;
+            if (!string.Equals(stored, upgraded, StringComparison.Ordinal))
+                user.CardCode = upgraded;
             user.LastLogin = DateTime.UtcNow;
             _db.SaveChanges();
             return AuthResult.Successful(user);
@@ -49,8 +55,9 @@ public sealed class AuthenticationService
         return AuthResult.Successful(user);
     }
 
-    private static bool VerifyAndUpgrade(string candidate, ref string? stored)
+    private static bool VerifyAndUpgrade(string candidate, string? stored, out string? upgraded)
     {
+        upgraded = stored;
         if (string.IsNullOrWhiteSpace(stored)) return false;
 
         // New format: BCrypt hash.
@@ -63,7 +70,7 @@ public sealed class AuthenticationService
                 Encoding.UTF8.GetBytes(candidate), Encoding.UTF8.GetBytes(stored)))
             return false;
 
-        stored = BCrypt.Net.BCrypt.HashPassword(candidate);
+        upgraded = BCrypt.Net.BCrypt.HashPassword(candidate);
         return true;
     }
 }
