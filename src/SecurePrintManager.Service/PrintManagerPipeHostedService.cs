@@ -3,6 +3,7 @@ using System.IO.Pipes;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SecurePrintManager.Core;
@@ -58,8 +59,7 @@ public sealed class PrintManagerPipeHostedService : BackgroundService
     private async Task<ResponseEnvelope> HandleAsync(RequestEnvelope request, CancellationToken ct)
     {
         if (request.Version != PrintManagerProtocol.CurrentVersion)
-            return Error(request, "UNSUPPORTED_VERSION", "Unsupported IPC protocol version.");
-
+            return Error(request, "UNSUPPORTED_VERSION", "Unsupported protocol version.");
         if (string.IsNullOrWhiteSpace(request.RequestId) || request.RequestId.Length > 64)
             return Error(request, "INVALID_REQUEST", "Invalid request id.");
 
@@ -70,10 +70,8 @@ public sealed class PrintManagerPipeHostedService : BackgroundService
 
             if (request.Operation == "health")
                 return Ok(request, new { status = "ok", service = "SecurePrintManager", version = 1 });
-
             if (request.Operation == "authenticate")
                 return Authenticate(request, db);
-
             if (!TryGetSession(request, out var session))
                 return Error(request, "UNAUTHORIZED", "Authentication is required.");
 
@@ -102,22 +100,21 @@ public sealed class PrintManagerPipeHostedService : BackgroundService
         var mode = request.Payload.TryGetProperty("mode", out var modeProperty) ? modeProperty.GetString() : null;
         var auth = new AuthenticationService(db);
         AuthResult result;
-
-        switch (mode)
+        try
         {
-            case "password":
-                result = auth.AuthenticateByUsernamePassword(
+            result = mode switch
+            {
+                "password" => auth.AuthenticateByUsernamePassword(
                     request.Payload.GetProperty("username").GetString() ?? string.Empty,
-                    request.Payload.GetProperty("password").GetString() ?? string.Empty);
-                break;
-            case "pin":
-                result = auth.AuthenticateByPin(request.Payload.GetProperty("pin").GetString() ?? string.Empty);
-                break;
-            case "card":
-                result = auth.AuthenticateByCard(request.Payload.GetProperty("card").GetString() ?? string.Empty);
-                break;
-            default:
-                return Error(request, "INVALID_AUTH_MODE", "Authentication mode must be password, pin or card.");
+                    request.Payload.GetProperty("password").GetString() ?? string.Empty),
+                "pin" => auth.AuthenticateByPin(request.Payload.GetProperty("pin").GetString() ?? string.Empty),
+                "card" => auth.AuthenticateByCard(request.Payload.GetProperty("card").GetString() ?? string.Empty),
+                _ => AuthResult.Failure("Authentication mode is invalid")
+            };
+        }
+        catch (KeyNotFoundException)
+        {
+            return Error(request, "INVALID_PAYLOAD", "Authentication payload is incomplete.");
         }
 
         if (!result.Success || result.User == null)
@@ -128,7 +125,6 @@ public sealed class PrintManagerPipeHostedService : BackgroundService
         var config = db.Configs.FirstOrDefault(c => c.Key == "SessionTimeoutMinutes");
         if (config != null && int.TryParse(config.Value, out var configured) && configured is >= 1 and <= 240)
             timeout = configured;
-
         _sessions[token] = new Session(result.User.Id, result.User.IsAdmin, DateTime.UtcNow.AddMinutes(timeout));
         return Ok(request, new { token, userId = result.User.Id, username = result.User.Username, isAdmin = result.User.IsAdmin, expiresUtc = _sessions[token].ExpiresUtc });
     }
@@ -139,8 +135,7 @@ public sealed class PrintManagerPipeHostedService : BackgroundService
         if (request.Payload.ValueKind != JsonValueKind.Object || !request.Payload.TryGetProperty("sessionToken", out var tokenProperty))
             return false;
         var token = tokenProperty.GetString();
-        if (string.IsNullOrWhiteSpace(token)) return false;
-        if (!_sessions.TryGetValue(token, out session)) return false;
+        if (string.IsNullOrWhiteSpace(token) || !_sessions.TryGetValue(token, out session)) return false;
         if (session.ExpiresUtc <= DateTime.UtcNow)
         {
             _sessions.TryRemove(token, out _);
@@ -158,13 +153,7 @@ public sealed class PrintManagerPipeHostedService : BackgroundService
     }
 
     private static Task<ResponseEnvelope> GetStatusAsync(RequestEnvelope request, DatabaseContext db, CancellationToken ct) =>
-        Task.FromResult(Ok(request, new
-        {
-            status = "running",
-            users = db.Users.Count(u => u.IsActive),
-            pendingJobs = db.PrintJobs.Count(j => j.Status == "HOLD"),
-            timestampUtc = DateTime.UtcNow
-        }));
+        Task.FromResult(Ok(request, new { status = "running", users = db.Users.Count(u => u.IsActive), pendingJobs = db.PrintJobs.Count(j => j.Status == "HOLD"), timestampUtc = DateTime.UtcNow }));
 
     private static async Task<ResponseEnvelope> GetJobsAsync(RequestEnvelope request, DatabaseContext db, Session session, CancellationToken ct)
     {
@@ -172,39 +161,27 @@ public sealed class PrintManagerPipeHostedService : BackgroundService
         var filterUserId = (int?)null;
         if (request.Payload.ValueKind == JsonValueKind.Object)
         {
-            if (request.Payload.TryGetProperty("limit", out var l) && l.TryGetInt32(out var n))
-                limit = Math.Clamp(n, 1, 500);
+            if (request.Payload.TryGetProperty("limit", out var l) && l.TryGetInt32(out var n)) limit = Math.Clamp(n, 1, 500);
             if (!session.IsAdmin) filterUserId = session.UserId;
-            else if (request.Payload.TryGetProperty("userId", out var uid) && uid.TryGetInt32(out var requestedUser))
-                filterUserId = requestedUser;
+            else if (request.Payload.TryGetProperty("userId", out var uid) && uid.TryGetInt32(out var requestedUser)) filterUserId = requestedUser;
         }
-        else if (!session.IsAdmin)
-        {
-            filterUserId = session.UserId;
-        }
+        else if (!session.IsAdmin) filterUserId = session.UserId;
 
         var query = db.PrintJobs.AsNoTracking().OrderByDescending(j => j.Timestamp).AsQueryable();
         if (filterUserId.HasValue) query = query.Where(j => j.UserId == filterUserId.Value);
-
-        var jobs = await query.Take(limit)
-            .Select(j => new { j.Id, j.UserId, j.DocumentName, j.Pages, j.PrinterName, j.Color, j.Duplex, j.Status, j.Timestamp, j.PrintedAt, j.ReleasedBy, j.Cost })
-            .ToListAsync(ct);
+        var jobs = await query.Take(limit).Select(j => new { j.Id, j.UserId, j.DocumentName, j.Pages, j.PrinterName, j.Color, j.Duplex, j.Status, j.Timestamp, j.PrintedAt, j.ReleasedBy, j.Cost }).ToListAsync(ct);
         return Ok(request, jobs);
     }
 
     private static async Task<ResponseEnvelope> GetUsersAsync(RequestEnvelope request, DatabaseContext db, CancellationToken ct)
     {
-        var users = await db.Users.AsNoTracking().OrderBy(u => u.Username)
-            .Select(u => new { u.Id, u.Username, u.FullName, u.Department, u.MonthlyQuota, u.PagesUsed, u.ScanQuota, u.ScansUsed, u.IsActive, u.IsAdmin, u.LastLogin })
-            .ToListAsync(ct);
+        var users = await db.Users.AsNoTracking().OrderBy(u => u.Username).Select(u => new { u.Id, u.Username, u.FullName, u.Department, u.MonthlyQuota, u.PagesUsed, u.ScanQuota, u.ScansUsed, u.IsActive, u.IsAdmin, u.LastLogin }).ToListAsync(ct);
         return Ok(request, users);
     }
 
     private static async Task<ResponseEnvelope> GetAuditAsync(RequestEnvelope request, DatabaseContext db, CancellationToken ct)
     {
-        var logs = await db.AuditLogs.AsNoTracking().OrderByDescending(a => a.Id).Take(500)
-            .Select(a => new { a.Id, a.Action, a.Username, a.DocumentName, a.Details, a.Timestamp, a.PreviousHash, a.CurrentHash })
-            .ToListAsync(ct);
+        var logs = await db.AuditLogs.AsNoTracking().OrderByDescending(a => a.Id).Take(500).Select(a => new { a.Id, a.Action, a.Username, a.DocumentName, a.Details, a.Timestamp, a.PreviousHash, a.CurrentHash }).ToListAsync(ct);
         return Ok(request, logs);
     }
 
@@ -214,11 +191,8 @@ public sealed class PrintManagerPipeHostedService : BackgroundService
         return Ok(request, config);
     }
 
-    private static ResponseEnvelope Ok(RequestEnvelope request, object payload) =>
-        new(PrintManagerProtocol.CurrentVersion, request.RequestId, true, null, null, JsonSerializer.SerializeToElement(payload));
-
-    private static ResponseEnvelope Error(RequestEnvelope request, string code, string message) =>
-        new(PrintManagerProtocol.CurrentVersion, request.RequestId, false, code, message, null);
+    private static ResponseEnvelope Ok(RequestEnvelope request, object payload) => new(PrintManagerProtocol.CurrentVersion, request.RequestId, true, null, null, JsonSerializer.SerializeToElement(payload));
+    private static ResponseEnvelope Error(RequestEnvelope request, string code, string message) => new(PrintManagerProtocol.CurrentVersion, request.RequestId, false, code, message, null);
 
     private sealed record Session(int UserId, bool IsAdmin, DateTime ExpiresUtc);
 }
