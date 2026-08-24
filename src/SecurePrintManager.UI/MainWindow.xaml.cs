@@ -1,8 +1,10 @@
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using SecurePrintManager.Core;
+using SecurePrintManager.Core.Ipc;
 using SecurePrintManager.Database;
 
 namespace SecurePrintManager.UI;
@@ -199,7 +201,9 @@ startxref
         }
     }
 
-    private void PrintSelectedJob_Click(object sender, RoutedEventArgs e)
+    private readonly PrintManagerClient _pipeClient = new();
+
+    private async void PrintSelectedJob_Click(object sender, RoutedEventArgs e)
     {
         var job = GetSelectedJob();
         if (job == null)
@@ -211,21 +215,43 @@ startxref
 
         ClearPreviewPdf();
 
-        job.Status = "PRINTED";
-        job.PrintedAt = DateTime.Now;
-        job.ReleasedBy = _currentUser.Username;
+        // Trimite comanda către Service, care apelează SetJob(RESUME) pe spooler.
+        // Vechea implementare doar seta Status="PRINTED" în DB - jobul nu era niciodată
+        // reluat de spooler, deci nu se tipărea efectiv nimic.
+        ReleaseButton.IsEnabled = false;
+        try
+        {
+            var response = await _pipeClient.SendAsync(
+                "ReleaseJob",
+                new JobActionRequest(job.Id, _currentUser.Username));
 
-        _quotaManager.UseQuota(_currentUser.Id, job.Pages);
-        _db.SaveChanges();
+            if (!response.Success)
+            {
+                MessageBox.Show($"Eliberare eșuată: {response.ErrorMessage}", "Eroare",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Nu s-a putut contacta serviciul SecurePrintManager: {ex.Message}\nServiciul rulează?",
+                "Eroare de comunicare", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+        finally
+        {
+            ReleaseButton.IsEnabled = true;
+        }
 
-        _auditLogger.Log("RELEASE", _currentUser.Username, job.DocumentName,
-            $"Job {job.Id} printed. Pages: {job.Pages}");
-
+        // Serviciul e sursa de adevăr pentru status/quota; reîncărcăm din DB ca să reflectăm
+        // ce a scris el (acest proces are propriul DbContext, separat de al serviciului).
+        _db.ChangeTracker.Clear();
         LoadUserInfo();
         LoadPrintQueue();
     }
 
-    private void DeleteSelectedJob_Click(object sender, RoutedEventArgs e)
+    private async void DeleteSelectedJob_Click(object sender, RoutedEventArgs e)
     {
         var job = GetSelectedJob();
         if (job == null)
@@ -241,12 +267,28 @@ startxref
 
         ClearPreviewPdf();
 
-        job.Status = "DELETED";
-        _db.SaveChanges();
+        try
+        {
+            var response = await _pipeClient.SendAsync(
+                "CancelJob",
+                new JobActionRequest(job.Id, _currentUser.Username));
 
-        _auditLogger.Log("DELETE", _currentUser.Username, job.DocumentName,
-            $"Job {job.Id} deleted from queue.");
+            if (!response.Success)
+            {
+                MessageBox.Show($"Anulare eșuată: {response.ErrorMessage}", "Eroare",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Nu s-a putut contacta serviciul SecurePrintManager: {ex.Message}\nServiciul rulează?",
+                "Eroare de comunicare", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
 
+        _db.ChangeTracker.Clear();
         LoadPrintQueue();
     }
 

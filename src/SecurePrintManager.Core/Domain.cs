@@ -29,6 +29,10 @@ public class PrintJob
     public string DocumentName { get; set; } = string.Empty;
     public int Pages { get; set; }
     public string PrinterName { get; set; } = string.Empty;
+    /// <summary>ID-ul nativ al job-ului în spooler-ul Windows (Win32_PrintJob.JobId), necesar
+    /// pentru a putea apela SetJob(RESUME) la eliberare. Fără el, jobul rămas HOLD nu mai
+    /// poate fi identificat în spooler odată ce evenimentul WMI inițial a trecut.</summary>
+    public int? SpoolerJobId { get; set; }
     public string? SpoolFile { get; set; }
     public string? SpoolFileHash { get; set; }
     public bool Color { get; set; }

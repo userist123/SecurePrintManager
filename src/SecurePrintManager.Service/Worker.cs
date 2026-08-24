@@ -1,10 +1,12 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SecurePrintManager.Core;
 using SecurePrintManager.Database;
+using SecurePrintManager.Service.Ipc;
 
 namespace SecurePrintManager.Service;
 
@@ -15,6 +17,7 @@ public class Worker : BackgroundService
     private PrintMonitor? _printMonitor;
     private PdfSpoolWatcher? _pdfWatcher;
     private ScanSpoolWatcher? _scanWatcher;
+    private Task? _pipeServerTask;
 
     public Worker(ILogger<Worker> logger, IServiceProvider serviceProvider)
     {
@@ -66,6 +69,15 @@ public class Worker : BackgroundService
             _pdfWatcher.Start(pdfFolder);
             _scanWatcher.Start(scanFolder);
 
+            // Pipe server-ul de release: construit manual cu instanțele din acest scope,
+            // la fel ca PrintMonitor mai sus - vezi nota din ServiceCollectionExtensions
+            // despre lifetime-ul serviciilor (DatabaseContext e Scoped dar consumat ca și
+            // cum ar fi Singleton pe durata worker-ului; nu schimb asta acum, doar rămân
+            // consistent cu tiparul existent în loc să introduc un al treilea).
+            var pipeLogger = scope.ServiceProvider.GetRequiredService<ILogger<PrintManagerPipeServer>>();
+            var pipeServer = new PrintManagerPipeServer(pipeLogger, db, audit, quotaManager);
+            _pipeServerTask = pipeServer.RunAsync(stoppingToken);
+
             _logger.LogInformation("Watchers started. PDF: {PdfFolder}, Scan: {ScanFolder}", pdfFolder, scanFolder);
 
             while (!stoppingToken.IsCancellationRequested)
@@ -88,6 +100,21 @@ public class Worker : BackgroundService
             _printMonitor?.Dispose();
             _pdfWatcher?.Stop();
             _scanWatcher?.Stop();
+
+            if (_pipeServerTask != null)
+            {
+                try
+                {
+                    // RunAsync se oprește singur pe OperationCanceledException când
+                    // stoppingToken e semnalat; dăm doar un răgaz scurt să se termine curat.
+                    await Task.WhenAny(_pipeServerTask, Task.Delay(TimeSpan.FromSeconds(3)));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "PrintManagerPipeServer nu s-a oprit curat");
+                }
+            }
+
             _logger.LogInformation("SecurePrintManager Worker stopped at {Time}", DateTimeOffset.Now);
         }
     }

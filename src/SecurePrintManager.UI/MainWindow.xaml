@@ -66,7 +66,7 @@
                             </DataGrid.Columns>
                         </DataGrid>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-                            <Button Content="Print" Click="PrintSelectedJob_Click" Margin="4" Width="90"/>
+                            <Button x:Name="ReleaseButton" Content="Print" Click="PrintSelectedJob_Click" Margin="4" Width="90"/>
                             <Button Content="Delete" Click="DeleteSelectedJob_Click" Margin="4" Width="90"/>
                         </StackPanel>
                     </StackPanel>
