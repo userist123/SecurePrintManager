@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using SecurePrintManager.Core;
 
 namespace SecurePrintManager.Database;
 
