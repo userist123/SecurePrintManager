@@ -14,24 +14,27 @@ public sealed class AuthenticationService
     public AuthResult AuthenticateByPin(string pin)
     {
         if (string.IsNullOrWhiteSpace(pin)) return AuthResult.Failure("Credențială invalidă");
-        var user = _db.Users.FirstOrDefault(u => u.IsActive && u.PinHash != null);
-        if (user == null || !BCrypt.Net.BCrypt.Verify(pin, user.PinHash!))
-            return AuthResult.Failure("PIN invalid sau utilizator inactiv");
-        user.LastLogin = DateTime.UtcNow;
-        _db.SaveChanges();
-        return AuthResult.Successful(user);
+        foreach (var user in _db.Users.Where(u => u.IsActive && !string.IsNullOrEmpty(u.PinCode)).ToList())
+        {
+            if (!VerifyAndUpgrade(pin.Trim(), ref user.PinCode)) continue;
+            user.LastLogin = DateTime.UtcNow;
+            _db.SaveChanges();
+            return AuthResult.Successful(user);
+        }
+        return AuthResult.Failure("PIN invalid sau utilizator inactiv");
     }
 
     public AuthResult AuthenticateByCard(string cardCode)
     {
         if (string.IsNullOrWhiteSpace(cardCode)) return AuthResult.Failure("Card invalid");
-        var normalized = cardCode.Trim();
-        var user = _db.Users.FirstOrDefault(u => u.IsActive && u.CardCodeHash != null);
-        if (user == null || !VerifyOpaqueIdentifier(normalized, user.CardCodeHash!))
-            return AuthResult.Failure("Card nevalid sau utilizator inactiv");
-        user.LastLogin = DateTime.UtcNow;
-        _db.SaveChanges();
-        return AuthResult.Successful(user);
+        foreach (var user in _db.Users.Where(u => u.IsActive && !string.IsNullOrEmpty(u.CardCode)).ToList())
+        {
+            if (!VerifyAndUpgrade(cardCode.Trim(), ref user.CardCode)) continue;
+            user.LastLogin = DateTime.UtcNow;
+            _db.SaveChanges();
+            return AuthResult.Successful(user);
+        }
+        return AuthResult.Failure("Card nevalid sau utilizator inactiv");
     }
 
     public AuthResult AuthenticateByUsernamePassword(string username, string password)
@@ -46,8 +49,23 @@ public sealed class AuthenticationService
         return AuthResult.Successful(user);
     }
 
-    private static string HashOpaqueIdentifier(string value) => BCrypt.Net.BCrypt.HashPassword(value);
-    private static bool VerifyOpaqueIdentifier(string value, string hash) => BCrypt.Net.BCrypt.Verify(value, hash);
+    private static bool VerifyAndUpgrade(string candidate, ref string? stored)
+    {
+        if (string.IsNullOrWhiteSpace(stored)) return false;
+
+        // New format: BCrypt hash.
+        if (stored.StartsWith("$2", StringComparison.Ordinal))
+            return BCrypt.Net.BCrypt.Verify(candidate, stored);
+
+        // Legacy plaintext is accepted only for migration. Successful authentication
+        // immediately replaces it with a BCrypt hash before the next use.
+        if (!CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(candidate), Encoding.UTF8.GetBytes(stored)))
+            return false;
+
+        stored = BCrypt.Net.BCrypt.HashPassword(candidate);
+        return true;
+    }
 }
 
 public sealed class AuthResult
@@ -67,13 +85,14 @@ public sealed class AuthResult
     public static AuthResult Failure(string message) => new(false, message);
 }
 
-public sealed class CardReader
+public sealed class CardReader : IDisposable
 {
     private System.IO.Ports.SerialPort? _serialPort;
     public event Action<string>? CardRead;
 
     public void Initialize(string portName, int baudRate)
     {
+        Close();
         _serialPort = new System.IO.Ports.SerialPort(portName, baudRate);
         _serialPort.DataReceived += SerialPort_DataReceived;
         _serialPort.Open();
@@ -98,6 +117,8 @@ public sealed class CardReader
         _serialPort.Dispose();
         _serialPort = null;
     }
+
+    public void Dispose() => Close();
 }
 
 public sealed class FileEncryptionService
@@ -109,7 +130,7 @@ public sealed class FileEncryptionService
     {
         var keyMaterial = Environment.GetEnvironmentVariable("SECUREPRINT_FILE_KEY");
         if (string.IsNullOrWhiteSpace(keyMaterial))
-            throw new InvalidOperationException("SECUREPRINT_FILE_KEY is not configured. Store the key outside source control using Windows secret management/DPAPI or another enterprise key store.");
+            throw new InvalidOperationException("SECUREPRINT_FILE_KEY is not configured. Provision the key outside source control with Windows-protected service configuration or an enterprise secret store.");
         _key = SHA256.HashData(Encoding.UTF8.GetBytes(keyMaterial));
     }
 
@@ -149,6 +170,8 @@ public sealed class FileEncryptionService
         var nonceLength = encryptedBytes[Magic.Length];
         var tagLength = encryptedBytes[Magic.Length + 1];
         var offset = Magic.Length + 2;
+        if (nonceLength <= 0 || tagLength <= 0 || encryptedBytes.Length < offset + nonceLength + tagLength)
+            throw new CryptographicException("Metadate de criptare invalide.");
         var nonce = encryptedBytes.AsSpan(offset, nonceLength).ToArray();
         offset += nonceLength;
         var tag = encryptedBytes.AsSpan(offset, tagLength).ToArray();
@@ -159,9 +182,6 @@ public sealed class FileEncryptionService
         aes.Decrypt(nonce, cipher, tag, plain);
         return plain;
     }
-
-    // Migration helper for future credential/key provisioning implementations.
-    public static string HashOpaqueIdentifier(string value) => BCrypt.Net.BCrypt.HashPassword(value);
 }
 
 public sealed class AuditLogger
