@@ -70,7 +70,7 @@
                     <TextBlock Text="Session timeout (minutes)"/>
                     <TextBox x:Name="SessionTimeoutTextBox" Margin="0,0,0,10"/>
 
-                    <TextBlock Text="Cost B&W (RON/page)"/>
+                    <TextBlock Text="Cost B&amp;W (RON/page)"/>
                     <TextBox x:Name="CostBwTextBox" Margin="0,0,0,10"/>
 
                     <TextBlock Text="Cost Color (RON/page)"/>
