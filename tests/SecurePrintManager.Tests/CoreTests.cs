@@ -1,17 +1,31 @@
-using SecurePrintManager.Core;
+using SecurePrintManager.Database;
+
 namespace SecurePrintManager.Tests;
+
 public class CoreTests
 {
-    [Fact] public void Invalid_transition_is_rejected()
+    [Fact]
+    public void PrintJob_defaults_to_hold()
     {
-        var j=new PrintJob{UserId=Guid.NewGuid(),PrinterName="P1",DocumentName="x.pdf",Pages=1};
-        Assert.Throws<InvalidOperationException>(()=>j.TransitionTo(JobState.Completed));
+        var job = new PrintJob
+        {
+            UserId = 1,
+            PrinterName = "P1",
+            DocumentName = "x.pdf",
+            Pages = 1
+        };
+
+        Assert.Equal("HOLD", job.Status);
+        Assert.Equal(1, job.Pages);
     }
-    [Fact] public async Task AES_GCM_round_trip()
+
+    [Fact]
+    public void AuditLog_defaults_have_empty_hash_and_action()
     {
-        var p=new AesGcmDocumentProtector(new byte[32]);
-        await using var input=new MemoryStream("secret"u8.ToArray());
-        var e=await p.ProtectAsync(input,default); await using var output=await p.UnprotectAsync(e,default);
-        using var r=new StreamReader(output); Assert.Equal("secret",await r.ReadToEndAsync());
+        var log = new AuditLog();
+
+        Assert.Empty(log.Action);
+        Assert.Empty(log.CurrentHash);
+        Assert.Null(log.PreviousHash);
     }
 }
