@@ -1,7 +1,3 @@
-using System;
-using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -23,16 +19,13 @@ public class Program
             .UseWindowsService()
             .ConfigureServices((hostContext, services) =>
             {
-                // Register DatabaseContext
                 services.AddDbContext<DatabaseContext>();
-
-                // Register Core services
                 services.AddSingleton<FileEncryptionService>();
                 services.AddSingleton<AuditLogger>();
                 services.AddSingleton<QuotaManager>();
-                services.AddSingleton<PrintMonitor>();
-
-                // Register Worker
+                services.AddSingleton<PdfSpoolWatcher>();
+                services.AddSingleton<ScanSpoolWatcher>();
+                services.AddHostedService<PrintManagerPipeHostedService>();
                 services.AddHostedService<Worker>();
             });
 }
