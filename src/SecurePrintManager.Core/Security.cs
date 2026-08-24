@@ -1,5 +1,3 @@
-using System;
-using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using BCrypt.Net;
@@ -7,170 +5,169 @@ using SecurePrintManager.Database;
 
 namespace SecurePrintManager.Core;
 
-public class AuthenticationService
+public sealed class AuthenticationService
 {
     private readonly DatabaseContext _db;
 
-    public AuthenticationService(DatabaseContext db)
-    {
-        _db = db;
-    }
+    public AuthenticationService(DatabaseContext db) => _db = db;
 
     public AuthResult AuthenticateByPin(string pin)
     {
-        var user = _db.Users.FirstOrDefault(u => u.PinCode == pin && u.IsActive);
-        if (user == null)
-            return new AuthResult(false, "PIN invalid sau utilizator inactiv");
-
-        user.LastLogin = DateTime.Now;
+        if (string.IsNullOrWhiteSpace(pin)) return AuthResult.Failure("Credențială invalidă");
+        var user = _db.Users.FirstOrDefault(u => u.IsActive && u.PinHash != null);
+        if (user == null || !BCrypt.Net.BCrypt.Verify(pin, user.PinHash!))
+            return AuthResult.Failure("PIN invalid sau utilizator inactiv");
+        user.LastLogin = DateTime.UtcNow;
         _db.SaveChanges();
-
-        return new AuthResult(true, "Autentificare reușită", user);
+        return AuthResult.Successful(user);
     }
 
     public AuthResult AuthenticateByCard(string cardCode)
     {
-        var user = _db.Users.FirstOrDefault(u => u.CardCode == cardCode && u.IsActive);
-        if (user == null)
-            return new AuthResult(false, "Card nevalid sau utilizator inactiv");
-
-        user.LastLogin = DateTime.Now;
+        if (string.IsNullOrWhiteSpace(cardCode)) return AuthResult.Failure("Card invalid");
+        var normalized = cardCode.Trim();
+        var user = _db.Users.FirstOrDefault(u => u.IsActive && u.CardCodeHash != null);
+        if (user == null || !VerifyOpaqueIdentifier(normalized, user.CardCodeHash!))
+            return AuthResult.Failure("Card nevalid sau utilizator inactiv");
+        user.LastLogin = DateTime.UtcNow;
         _db.SaveChanges();
-
-        return new AuthResult(true, "Autentificare reușită", user);
+        return AuthResult.Successful(user);
     }
 
     public AuthResult AuthenticateByUsernamePassword(string username, string password)
     {
-        var user = _db.Users.FirstOrDefault(u => u.Username == username && u.IsActive);
-        if (user == null || string.IsNullOrEmpty(user.PasswordHash))
-            return new AuthResult(false, "Utilizator invalid");
-
-        if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
-            return new AuthResult(false, "Parolă incorectă");
-
-        user.LastLogin = DateTime.Now;
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
+            return AuthResult.Failure("Utilizator sau parolă invalidă");
+        var user = _db.Users.FirstOrDefault(u => u.IsActive && u.Username == username);
+        if (user == null || string.IsNullOrEmpty(user.PasswordHash) || !BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+            return AuthResult.Failure("Utilizator sau parolă invalidă");
+        user.LastLogin = DateTime.UtcNow;
         _db.SaveChanges();
-
-        return new AuthResult(true, "Autentificare reușită", user);
+        return AuthResult.Successful(user);
     }
+
+    private static string HashOpaqueIdentifier(string value) => BCrypt.Net.BCrypt.HashPassword(value);
+    private static bool VerifyOpaqueIdentifier(string value, string hash) => BCrypt.Net.BCrypt.Verify(value, hash);
 }
 
-public class AuthResult
+public sealed class AuthResult
 {
-    public bool Success { get; set; }
-    public string Message { get; set; }
-    public User? User { get; set; }
+    public bool Success { get; }
+    public string Message { get; }
+    public User? User { get; }
 
-    public AuthResult(bool success, string message, User? user = null)
+    private AuthResult(bool success, string message, User? user = null)
     {
         Success = success;
         Message = message;
         User = user;
     }
+
+    public static AuthResult Successful(User user) => new(true, "Autentificare reușită", user);
+    public static AuthResult Failure(string message) => new(false, message);
 }
 
-public class CardReader
+public sealed class CardReader
 {
     private System.IO.Ports.SerialPort? _serialPort;
     public event Action<string>? CardRead;
 
     public void Initialize(string portName, int baudRate)
     {
-        try
-        {
-            _serialPort = new System.IO.Ports.SerialPort(portName, baudRate);
-            _serialPort.DataReceived += SerialPort_DataReceived;
-            _serialPort.Open();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Eroare la inițializarea cititorului de carduri: {ex.Message}");
-        }
+        _serialPort = new System.IO.Ports.SerialPort(portName, baudRate);
+        _serialPort.DataReceived += SerialPort_DataReceived;
+        _serialPort.Open();
     }
 
-    private void SerialPort_DataReceived(object sender, System.IO.Ports.SerialDataReceivedEventArgs e)
+    private void SerialPort_DataReceived(object? sender, System.IO.Ports.SerialDataReceivedEventArgs e)
     {
-        if (_serialPort == null) return;
-
         try
         {
-            var cardCode = _serialPort.ReadLine().Trim();
-            CardRead?.Invoke(cardCode);
+            var code = _serialPort?.ReadLine()?.Trim();
+            if (!string.IsNullOrWhiteSpace(code)) CardRead?.Invoke(code);
         }
-        catch { }
+        catch (IOException) { }
+        catch (InvalidOperationException) { }
     }
 
     public void Close()
     {
-        if (_serialPort != null && _serialPort.IsOpen)
-        {
-            _serialPort.DataReceived -= SerialPort_DataReceived;
-            _serialPort.Close();
-            _serialPort.Dispose();
-        }
+        if (_serialPort == null) return;
+        _serialPort.DataReceived -= SerialPort_DataReceived;
+        if (_serialPort.IsOpen) _serialPort.Close();
+        _serialPort.Dispose();
+        _serialPort = null;
     }
 }
 
-public class FileEncryptionService
+public sealed class FileEncryptionService
 {
+    private static readonly byte[] Magic = Encoding.ASCII.GetBytes("SPM1");
     private readonly byte[] _key;
-    private readonly byte[] _iv;
 
     public FileEncryptionService()
     {
-        // În producție, salvează cheia într-un loc sigur (Windows DPAPI, Azure Key Vault, etc.)
-        var keyBytes = Encoding.UTF8.GetBytes("SecurePrintManager2026Key32Bytes!");
-        _key = keyBytes;
-        _iv = Encoding.UTF8.GetBytes("SecurePrintIV16B");
+        var keyMaterial = Environment.GetEnvironmentVariable("SECUREPRINT_FILE_KEY");
+        if (string.IsNullOrWhiteSpace(keyMaterial))
+            throw new InvalidOperationException("SECUREPRINT_FILE_KEY is not configured. Store the key outside source control using Windows secret management/DPAPI or another enterprise key store.");
+        _key = SHA256.HashData(Encoding.UTF8.GetBytes(keyMaterial));
     }
 
     public void EncryptFile(string filePath)
     {
         var plainBytes = File.ReadAllBytes(filePath);
-        var encryptedBytes = Encrypt(plainBytes);
-        File.WriteAllBytes(filePath, encryptedBytes);
+        File.WriteAllBytes(filePath, Encrypt(plainBytes));
     }
 
     public void DecryptFile(string filePath)
     {
         var encryptedBytes = File.ReadAllBytes(filePath);
-        var decryptedBytes = Decrypt(encryptedBytes);
-        File.WriteAllBytes(filePath, decryptedBytes);
+        File.WriteAllBytes(filePath, Decrypt(encryptedBytes));
     }
 
     private byte[] Encrypt(byte[] plainBytes)
     {
-        using var aes = Aes.Create();
-        aes.Key = _key;
-        aes.IV = _iv;
-
+        using var aes = new AesGcm(_key, 16);
+        var nonce = RandomNumberGenerator.GetBytes(12);
+        var tag = new byte[16];
+        var cipher = new byte[plainBytes.Length];
+        aes.Encrypt(nonce, plainBytes, cipher, tag);
         using var ms = new MemoryStream();
-        using (var cs = new CryptoStream(ms, aes.CreateEncryptor(), CryptoStreamMode.Write))
-        {
-            cs.Write(plainBytes, 0, plainBytes.Length);
-        }
+        ms.Write(Magic);
+        ms.WriteByte((byte)nonce.Length);
+        ms.WriteByte((byte)tag.Length);
+        ms.Write(nonce);
+        ms.Write(tag);
+        ms.Write(cipher);
         return ms.ToArray();
     }
 
     private byte[] Decrypt(byte[] encryptedBytes)
     {
-        using var aes = Aes.Create();
-        aes.Key = _key;
-        aes.IV = _iv;
-
-        using var ms = new MemoryStream();
-        using (var cs = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Write))
-        {
-            cs.Write(encryptedBytes, 0, encryptedBytes.Length);
-        }
-        return ms.ToArray();
+        if (encryptedBytes.Length < Magic.Length + 2 + 12 + 16 || !encryptedBytes.AsSpan(0, Magic.Length).SequenceEqual(Magic))
+            throw new CryptographicException("Fișierul nu are un format SecurePrintManager valid.");
+        var nonceLength = encryptedBytes[Magic.Length];
+        var tagLength = encryptedBytes[Magic.Length + 1];
+        var offset = Magic.Length + 2;
+        var nonce = encryptedBytes.AsSpan(offset, nonceLength).ToArray();
+        offset += nonceLength;
+        var tag = encryptedBytes.AsSpan(offset, tagLength).ToArray();
+        offset += tagLength;
+        var cipher = encryptedBytes.AsSpan(offset).ToArray();
+        var plain = new byte[cipher.Length];
+        using var aes = new AesGcm(_key, tagLength);
+        aes.Decrypt(nonce, cipher, tag, plain);
+        return plain;
     }
+
+    // Migration helper for future credential/key provisioning implementations.
+    public static string HashOpaqueIdentifier(string value) => BCrypt.Net.BCrypt.HashPassword(value);
 }
 
-public class AuditLogger
+public sealed class AuditLogger
 {
     private readonly DatabaseContext _db;
+    private readonly object _sync = new();
     private string? _lastHash;
 
     public AuditLogger(DatabaseContext db)
@@ -179,69 +176,56 @@ public class AuditLogger
         _lastHash = GetLastHash();
     }
 
-    private string? GetLastHash()
-    {
-        var lastLog = _db.AuditLogs.OrderByDescending(a => a.Timestamp).FirstOrDefault();
-        return lastLog?.CurrentHash;
-    }
+    private string? GetLastHash() => _db.AuditLogs.OrderByDescending(a => a.Id).Select(a => a.CurrentHash).FirstOrDefault();
 
     public void Log(string action, string? username, string? documentName, string details)
     {
-        var entry = new AuditLog
+        lock (_sync)
         {
-            Action = action,
-            Username = username,
-            DocumentName = documentName,
-            Details = details,
-            IpAddress = Environment.MachineName,
-            PreviousHash = _lastHash,
-            CurrentHash = ComputeHash(action, username, documentName, details, _lastHash, DateTime.Now),
-            Timestamp = DateTime.Now
-        };
-
-        _db.AuditLogs.Add(entry);
-        _db.SaveChanges();
-
-        _lastHash = entry.CurrentHash;
+            var timestamp = DateTime.UtcNow;
+            var currentHash = ComputeHash(action, username, documentName, details, _lastHash, timestamp);
+            var entry = new AuditLog
+            {
+                Action = action,
+                Username = username,
+                DocumentName = documentName,
+                Details = details,
+                IpAddress = Environment.MachineName,
+                PreviousHash = _lastHash,
+                CurrentHash = currentHash,
+                Timestamp = timestamp
+            };
+            _db.AuditLogs.Add(entry);
+            _db.SaveChanges();
+            _lastHash = currentHash;
+        }
     }
 
-    private string ComputeHash(string action, string? username, string? documentName, string details, string? previousHash, DateTime timestamp)
+    private static string ComputeHash(string action, string? username, string? documentName, string details, string? previousHash, DateTime timestamp)
     {
         var data = $"{action}|{username}|{documentName}|{details}|{previousHash}|{timestamp:O}";
-        using var sha256 = SHA256.Create();
-        var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(data));
-        return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(data))).ToLowerInvariant();
     }
 }
 
-public class QuotaManager
+public sealed class QuotaManager
 {
     private readonly DatabaseContext _db;
-
-    public QuotaManager(DatabaseContext db)
-    {
-        _db = db;
-    }
+    public QuotaManager(DatabaseContext db) => _db = db;
 
     public bool CheckQuota(int userId, int pagesNeeded)
     {
         var user = _db.Users.Find(userId);
-        if (user == null) return false;
-
-        // Reset lunar automat
-        if (user.LastQuotaReset == null || user.LastQuotaReset.Value.Month != DateTime.Now.Month)
-        {
-            ResetMonthlyQuota(user);
-        }
-
+        if (user == null || pagesNeeded < 0) return false;
+        EnsureMonthlyReset(user);
         return user.PagesUsed + pagesNeeded <= user.MonthlyQuota;
     }
 
     public void UseQuota(int userId, int pagesUsed)
     {
-        var user = _db.Users.Find(userId);
-        if (user == null) return;
-
+        if (pagesUsed < 0) throw new ArgumentOutOfRangeException(nameof(pagesUsed));
+        var user = _db.Users.Find(userId) ?? throw new InvalidOperationException("Utilizator inexistent.");
+        EnsureMonthlyReset(user);
         user.PagesUsed += pagesUsed;
         _db.SaveChanges();
     }
@@ -250,15 +234,22 @@ public class QuotaManager
     {
         user.PagesUsed = 0;
         user.ScansUsed = 0;
-        user.LastQuotaReset = DateTime.Now;
+        user.LastQuotaReset = DateTime.UtcNow;
         _db.SaveChanges();
     }
 
     public decimal GetQuotaUsagePercent(int userId)
     {
         var user = _db.Users.Find(userId);
-        if (user == null) return 0;
+        if (user == null || user.MonthlyQuota <= 0) return 0;
+        EnsureMonthlyReset(user);
+        return Math.Min(100m, user.PagesUsed * 100m / user.MonthlyQuota);
+    }
 
-        return (decimal)user.PagesUsed / user.MonthlyQuota * 100;
+    private void EnsureMonthlyReset(User user)
+    {
+        var now = DateTime.UtcNow;
+        if (user.LastQuotaReset == null || user.LastQuotaReset.Value.Year != now.Year || user.LastQuotaReset.Value.Month != now.Month)
+            ResetMonthlyQuota(user);
     }
 }
