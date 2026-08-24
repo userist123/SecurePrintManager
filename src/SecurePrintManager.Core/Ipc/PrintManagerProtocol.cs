@@ -8,21 +8,25 @@ public static class PrintManagerProtocol
     public const int MaxMessageBytes = 64 * 1024;
     public const string PipeName = "SecurePrintManager.Control.v1";
 
-    public static byte[] Serialize(RequestEnvelope request) =>
-        JsonSerializer.SerializeToUtf8Bytes(request, JsonOptions.Default);
+    public static byte[] Serialize(RequestEnvelope request) => JsonSerializer.SerializeToUtf8Bytes(request, JsonOptions.Default);
+    public static byte[] Serialize(ResponseEnvelope response) => JsonSerializer.SerializeToUtf8Bytes(response, JsonOptions.Default);
 
     public static RequestEnvelope DeserializeRequest(ReadOnlySpan<byte> payload) =>
         JsonSerializer.Deserialize<RequestEnvelope>(payload, JsonOptions.Default)
         ?? throw new InvalidDataException("IPC request is empty or invalid.");
 
-    public static byte[] Serialize(ResponseEnvelope response) =>
-        JsonSerializer.SerializeToUtf8Bytes(response, JsonOptions.Default);
+    public static ResponseEnvelope DeserializeResponse(ReadOnlySpan<byte> payload) =>
+        JsonSerializer.Deserialize<ResponseEnvelope>(payload, JsonOptions.Default)
+        ?? throw new InvalidDataException("IPC response is empty or invalid.");
+
+    public static T DeserializePayload<T>(JsonElement payload) =>
+        payload.Deserialize<T>(JsonOptions.Default) ?? throw new InvalidDataException("IPC payload is invalid.");
 
     private static class JsonOptions
     {
         public static readonly JsonSerializerOptions Default = new(JsonSerializerDefaults.Web)
         {
-            PropertyNameCaseInsensitive = false,
+            PropertyNameCaseInsensitive = true,
             MaxDepth = 16
         };
     }
