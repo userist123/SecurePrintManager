@@ -4,7 +4,6 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using SecurePrintManager.Database;
-using SecurePrintManager.Database.Models;
 
 namespace SecurePrintManager.Core;
 

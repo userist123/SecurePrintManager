@@ -3,7 +3,6 @@ using System.IO;
 using System.Linq;
 using Microsoft.Extensions.Logging;
 using SecurePrintManager.Database;
-using SecurePrintManager.Database.Models;
 
 namespace SecurePrintManager.Core;
 
